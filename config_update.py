@@ -94,6 +94,14 @@ def format_config(data: dict) -> str:
     PhraseFin: {data.get('PhraseFin')}
     phone_number: {data.get('phone_number')}
     code_country: {data.get('code_country')}
+    max_endpointing_delay: {data.get('max_endpointing_delay')}
+    min_endpointing_delay: {data.get('min_endpointing_delay')}
+    min_interruption_duration: {data.get('min_interruption_duration')}
+    phrase_interests: {data.get('phrase_interests')}
+    relance_timer: {data.get('relance_timer')}
+    close_timer: {data.get('close_timer')}
+    voice_speed: {data.get('voice_speed')}
+    voice_volume: {data.get('voice_volume')}
 """
 
 def upsert_config_for_code(code: str, data: dict) -> str | None:
