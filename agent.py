@@ -171,8 +171,26 @@ def get_definition_livana_from_config(cfg_path: str):
         logger.warning("Config not found: %s", cfg_path)
     return None
 
+def get_key_from_config(cfg_path: str, key):
+    try:
+        for line in read_lines_robust(cfg_path):
+            if line.startswith(f"    {key}:"):
+                return line.replace(f"    {key}:", "").strip()
+    except FileNotFoundError:
+        logger.warning("Config not found: %s", cfg_path)
+    return None
+
+def check_None(key, value):
+    if key == "None" or key == "":
+      key = f"{value}"
+      logger.info(f" NON DETECTE DEFAUT CHOISI : {value}")
+      return key
+    else:
+      return key
+
+
 def prewarm(proc: JobProcess):
-    proc.userdata["vad"] = silero.VAD.load(min_speech_duration=0.10,min_silence_duration=0.3,max_buffered_speech=60,activation_threshold=0.1,prefix_padding_duration=0.5,)
+    proc.userdata["vad"] = silero.VAD.load(min_speech_duration=0.5,min_silence_duration=0.3,max_buffered_speech=60,activation_threshold=0.1,prefix_padding_duration=0.5,)
 
 
 def get_prenom_livana_from_config(cfg_path: str):
@@ -576,6 +594,7 @@ class LivanaOutboundAgent(Agent):
         phrasedebut: str | None,
         phrasefin: str | None,
         dial_info: dict[str, Any],
+        phrase_interests: str | None,
     ):
     
             
@@ -611,7 +630,7 @@ Objectif : Générer des réponses amicales, naturelles, et brèves qui valident
 
 ## Identite et Contexte
 - Voici qui tu es({prenomLivana}), la personnalité que tu dois prendre, le format de réponse à adopter, ainsi que des information complémentaire sur {prenom} pour la discussion : {definition_livana}.
-- Les souvenirs et intérêts de {prenom} : {interests}
+- Les intérêts de {prenom} {phrase_interests}) : {interests}
 
 ## Déroulé structuré (5 étapes)
 
@@ -626,23 +645,23 @@ Etape 2. Activités du Jour
 - Aborde aussi de ce que tu fait ( {prenomLivana} ) aujourd'hui avec {prenom}.
 
 Etape 3. Approfondissement
-- Réagis prioritairement sur les propos récents ("relance"), ou provoque la discussion via souvenirs/intérêts de {prenom} si nécessaire.
+- Réagis prioritairement sur les propos récents ("relance"), ou provoque la discussion les intérêts de {prenom} si nécessaire.
 - En cas de mal-être ou de problème de santé, utilise la méthode donner.
 
 Etape 4. Intérêts
-- Introduis de façon naturelle souvenirs ou intérêts.
+- Introduis de façon naturelle les intérêts de {prenom}.
 - En cas de mal-être ou de problème de santé, utilise la méthode donner.
 
 Etape 5. Fin d’appel (après 5 minutes)
 1. Après 5 minutes, annonce dans une phrase unique que tu dois partir et que tu rappelleras plus tard, cette réponse doit être une seule phrase et le seul sujet de celle-ci.
   - Attend ca reponse.
-2. Réduit lui que tu la rappellera plus tard.
+2. Rédit lui que tu la rappellera plus tard.
   - Attend ca reponse.
 2. Si {prenom} répond à côté, négativement, ou demande de continuer de parler : continuer a parler sur ce qu'elle souhaite et 3-4 réponse après redis lui que tu doit partir.
   - Attend ca réponse.
 3. Si elle donne sont accord/reponse positive alors repond lui obligatoirement et uniquement : {phrasefin}
 4. Attend ca reponse.
-5. Répond lui : A plus tard !.
+5. Répond lui : Au revoir !.
 6. Attend ca reponse.
 7. Puis declenche OBLIGATOIREMENT et UNIQUEMENT l'outil "Closeconv", SANS le dire dans ta reponse et sans variation emotionelle UNIQUEMENT l'outil.
 
@@ -781,7 +800,26 @@ async def entrypoint( ctx: JobContext):
         interests = get_interests_string(cfg_path)
         phrase_debut, phrase_fin = get_phrases(cfg_path)
         voix_id = get_voix_id_from_config(cfg_path)
-    
+        max_endpointing_delay = get_key_from_config(cfg_path,"max_endpointing_delay")
+        min_endpointing_delay = get_key_from_config(cfg_path,"min_endpointing_delay")
+        min_interruption_duration = get_key_from_config(cfg_path,"min_interruption_duration")
+        phrase_interests = get_key_from_config(cfg_path,"phrase_interests")
+        relance_timer = get_key_from_config(cfg_path,"relance_timer")
+        close_timer = get_key_from_config(cfg_path,"close_timer")
+        voice_speed = get_key_from_config(cfg_path,"voice_speed")
+        voice_volume = get_key_from_config(cfg_path,"voice_volume")
+        
+        
+        max_endpointing_delay = check_None(max_endpointing_delay,"4") #DEFAULT
+        min_endpointing_delay = check_None(min_endpointing_delay,"2") #DEFAULT
+        min_interruption_duration = check_None(min_interruption_duration,"1") #DEFAULT
+        phrase_interests = check_None(phrase_interests,",") #DEFAULT
+        relance_timer = check_None(relance_timer,"6") #DEFAULT
+        close_timer = check_None(close_timer,"6") #DEFAULT
+        voice_speed = check_None(voice_speed,"1") #DEFAULT
+        voice_volume = check_None(voice_volume,"1") #DEFAULT
+        
+        
         # Parse outbound dialing metadata
         logger.info("metadata received (repr): %r", ctx.job.metadata)
         dial_info = parse_metadata(ctx.job.metadata)
@@ -796,6 +834,7 @@ async def entrypoint( ctx: JobContext):
             phrasedebut=phrase_debut,
             phrasefin=phrase_fin,
             dial_info=dial_info,
+            phrase_interests=phrase_interests,
         )
     
         TRANSCRIPT_DIR = os.getenv("TRANSCRIPT_DIR", "/home/ubuntu/agent_tel/transcriptions")
@@ -982,11 +1021,11 @@ async def entrypoint( ctx: JobContext):
             allow_interruptions = True,
             vad=ctx.proc.userdata["vad"],
             preemptive_generation=True,
-    		    min_interruption_duration=1,
+ 		        min_interruption_duration=float(min_interruption_duration),
+            max_endpointing_delay=float(max_endpointing_delay),
+            min_endpointing_delay=float(min_endpointing_delay),
             min_interruption_words=3,
-            user_away_timeout=6,
-            max_endpointing_delay=3.5,
-            min_endpointing_delay=0.3,
+            user_away_timeout=int(relance_timer),
             use_tts_aligned_transcript=True,
             #stt=assemblyai.STT(language="fr",end_of_turn_confidence_threshold=0.2,min_end_of_turn_silence_when_confident=1,max_turn_silence=2400,), 
             #vad=silero.VAD.load(),
@@ -1009,7 +1048,7 @@ async def entrypoint( ctx: JobContext):
                         #]),
                       
             #llm=openai.realtime.RealtimeModel(),
-            tts=inference.TTS(model="cartesia/sonic-3",voice=voice_id,language="fr", ),
+            tts=inference.TTS(model="cartesia/sonic-3",voice=voice_id,language="fr", extra_kwargs={"speed": float(voice_speed),"volume": float(voice_volume)}),
             #tts=tts.FallbackAdapter([cartesia.TTS(model="sonic-3",voice=voice_id,language="fr",)
                         #]),
             #turn_detection=MultilingualModel(),
@@ -1037,7 +1076,7 @@ async def entrypoint( ctx: JobContext):
                         "Demande si la personne est toujours la, et pose une question sur les souvenirs et interets, si t'es encore dans l'etape 1 alors ne dit que ne dit que 'allo tu m'entend' "
                     )
                 )
-                await asyncio.sleep(6)
+                await asyncio.sleep(int(relance_timer))
     
             session.shutdown()
     
@@ -1171,6 +1210,56 @@ async def entrypoint( ctx: JobContext):
           except Exception as e:
             logger.error(f"is_transcription_empty error: {e}")
             return False
+
+        async def _conversation_timer():
+            try:
+                total = float(close_timer) * 60.0
+                start = asyncio.get_event_loop().time()
+                
+                now = asyncio.get_event_loop().time()
+                elapsed = now - start
+                remaining = total - elapsed
+                if remaining > 0:
+                    await asyncio.sleep(remaining)
+        
+                # 2) Envoi de la phrase de fin (phrase_fin) et fermeture propre
+                try:
+                    if phrase_fin:
+                        # on demande explicitement au LLM / session de prononcer la phrase de fin
+                        logger.info("ENVOIE MESSAGE FIN")
+                        #await session.generate_reply( instructions="Code:1998")
+                        await session.say("je vais devoir doucement y aller je te rappele plus tard ?",allow_interruptions=False,)
+                        # attendre que la parole en cours soit jouée
+                        current_speech = getattr(session, "current_speech", None)
+                        if current_speech:
+                            try:
+                                await current_speech.wait_for_playout()
+                            except Exception:
+                                # ignore si impossible de waiter
+                                pass
+                        # petit délai naturel avant suppression
+                    # suppression de la room et shutdown du job
+                except Exception as e:
+                    logger.error("Timer close sequence failed: %s", e)
+        
+            except asyncio.CancelledError:
+                # timer annulé proprement (par ex. lors d'un shutdown manuel)
+                logger.info("Conversation timer cancelled")
+                raise
+            except Exception as e:
+                logger.exception("Unhandled error in conversation timer: %s", e)
+        
+        # et s'assurer qu'on annule le timer si on shutdowne autrement
+        def _cancel_timer_on_shutdown():
+            try:
+                if timer_task and not timer_task.done():
+                    timer_task.cancel()
+            except Exception:
+                pass
+        
+        #ctx.add_shutdown_callback(_cancel_timer_on_shutdown)
+        # ---------------------------------------------------------------------    
+    
     
         # Start agent session BEFORE dialing so we don't miss early speech
         session_started = asyncio.create_task(
@@ -1187,8 +1276,8 @@ async def entrypoint( ctx: JobContext):
           
         background_audio = BackgroundAudioPlayer(
         thinking_sound=[
-            AudioConfig("/home/ubuntu/agent_tel/Breath_inV2_2.wav", volume=1,probability=0.5),
-            AudioConfig("/home/ubuntu/agent_tel/Breath_inV2.wav", volume=1,probability=0.5),
+            AudioConfig("/home/ubuntu/agent_tel/Breath_inV2_2.wav", volume=1),
+            AudioConfig("/home/ubuntu/agent_tel/Breath_inV2.wav", volume=1),
           ],
         )  
         await background_audio.start(room=ctx.room, agent_session=session)
@@ -1214,6 +1303,8 @@ async def entrypoint( ctx: JobContext):
             logger.info("participant joined: %s", participant.identity)
             agent.set_participant(participant)
             write_task = asyncio.create_task(_transcription_writer())
+            timer_task = asyncio.create_task(_conversation_timer())
+            
         except api.TwirpError as e:
             logger.error(
                 "error creating SIP participant: %s, SIP status: %s %s",
